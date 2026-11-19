@@ -7,89 +7,97 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-
-    <!-- Banner Notifica Vincita -->
     <div id="win-banner" class="win-banner hidden"></div>
 
-    <!-- Container Menu / Lobby -->
+    <!-- MENU PRINCIPALE / LOBBY -->
     <div id="menu-container" class="container">
-        <h1>Tombola Online 🎄</h1>
+        <h1>Tombola Multiplayer</h1>
 
+        <!-- HOME -->
         <div id="home-screen" class="screen">
-            <button id="btn-create" class="btn">Crea Stanza (Host)</button>
-            <button id="btn-join" class="btn secondary">Entra in una Stanza</button>
+            <input type="text" id="input-host-name" placeholder="Il tuo nome (Host)" maxlength="20" autocomplete="off">
+            <button id="btn-create" class="btn highlight">Crea una Stanza</button>
+            <button id="btn-join" class="btn">Entra in una Stanza</button>
+            <p id="home-error" class="error"></p>
         </div>
 
+        <!-- INSERIMENTO PIN -->
         <div id="join-screen" class="screen hidden">
-            <h2>Inserisci il PIN</h2>
-            <input type="text" id="input-pin" maxlength="6" placeholder="PIN a 6 cifre">
-            <button id="btn-verify-pin" class="btn">Verifica PIN</button>
+            <h2>Inserisci PIN Stanza</h2>
+            <input type="text" id="input-pin" placeholder="PIN a 6 cifre" maxlength="6" autocomplete="off">
+            <button id="btn-verify-pin" class="btn">Avanti</button>
             <button id="btn-back-home" class="btn text">Indietro</button>
             <p id="join-error" class="error"></p>
         </div>
 
+        <!-- CONFIGURAZIONE GIOCATORE -->
         <div id="player-config-screen" class="screen hidden">
             <h2>Configura Giocatore</h2>
-            <input type="text" id="input-name" placeholder="Il tuo nome">
-            <label for="input-cards">Numero di cartelle (1-6):</label>
+            <input type="text" id="input-name" placeholder="Il tuo nome" maxlength="20" autocomplete="off">
+            <label for="input-cards" class="label">Numero di cartelle (1-6)</label>
             <input type="number" id="input-cards" min="1" max="6" value="1">
-            <button id="btn-join-room" class="btn">Entra nella Stanza</button>
+            <button id="btn-join-room" class="btn highlight">Entra nella Lobby</button>
+            <button id="btn-back-join" class="btn text">Indietro</button>
         </div>
 
+        <!-- LOBBY -->
         <div id="lobby-screen" class="screen hidden">
-            <h2>PIN Stanza: <span id="display-pin" class="pin-badge"></span></h2>
-            <div id="host-controls" class="hidden">
-                <p class="info-text">Condividi il PIN (max 8 giocatori).</p>
+            <h2>PIN Stanza</h2>
+            <div id="display-pin" class="pin-badge">------</div>
+            <p class="label">Giocatori connessi: <span id="player-count">0</span> / 8</p>
+            <ul id="players-list"></ul>
+
+            <div id="host-controls" class="screen hidden">
                 <button id="btn-start-game" class="btn highlight">Avvia Partita</button>
             </div>
-            <div id="player-waiting" class="hidden">
-                <p class="info-text">In attesa che l'Host avvii la partita...</p>
+            <div id="player-waiting" class="screen hidden">
+                <p class="label">In attesa che l'Host avvii la partita...</p>
             </div>
-            <h3>Giocatori (<span id="player-count">0</span>/8):</h3>
-            <ul id="players-list"></ul>
         </div>
     </div>
 
-    <!-- Schermata Gioco: HOST (Tabellone) -->
+    <!-- SCHERMATA DI GIOCO HOST -->
     <div id="host-game-screen" class="game-container hidden">
-        <header class="top-bar">
+        <div class="top-bar">
             <div class="stat-box">
                 <span class="label">Estratti:</span>
-                <strong id="extracted-counter">0 / 90</strong>
+                <strong id="host-extracted-counter">0 / 90</strong>
             </div>
             <div class="last-numbers-box">
                 <span class="label">Ultimi numeri:</span>
-                <div id="last-six-container" class="last-six"></div>
+                <div id="host-last-six-container" class="last-six"></div>
             </div>
             <div class="actions-box">
-                <button id="btn-open-prizes-host" class="btn secondary">🏆 Vincite</button>
+                <button id="btn-open-prizes-host" class="btn secondary">Vincite</button>
                 <button id="btn-extract" class="btn highlight">Estrai Numero</button>
             </div>
-        </header>
-
-        <main id="host-board-grid" class="host-board-grid"></main>
+        </div>
+        <div id="host-board-grid" class="host-board-grid"></div>
     </div>
 
-    <!-- Schermata Gioco: GIOCATORE (Cartelle) -->
+    <!-- SCHERMATA DI GIOCO GIOCATORE -->
     <div id="player-game-screen" class="game-container hidden">
-        <header class="top-bar">
+        <div class="top-bar">
             <div class="stat-box">
-                <span class="label">Ultimo numero:</span>
-                <strong id="player-current-num" class="current-badge">-</strong>
+                <span class="label">Estratti:</span>
+                <strong id="player-extracted-counter">0 / 90</strong>
+            </div>
+            <div class="last-numbers-box">
+                <span class="label">Ultimi numeri:</span>
+                <div id="player-last-six-container" class="last-six"></div>
             </div>
             <div class="actions-box">
-                <button id="btn-open-prizes-player" class="btn secondary">🏆 Vincite</button>
+                <button id="btn-open-prizes-player" class="btn secondary">Vincite</button>
             </div>
-        </header>
-
-        <main id="player-cards-grid" class="player-cards-grid"></main>
+        </div>
+        <div id="player-cards-grid" class="player-cards-grid"></div>
     </div>
 
-    <!-- Popup Storico Vincite -->
+    <!-- MODALE VINCITE -->
     <div id="prizes-modal" class="modal hidden">
         <div class="modal-content">
             <div class="modal-header">
-                <h2>🏆 Tabella Premi</h2>
+                <h2>Riepilogo Vincite</h2>
                 <button id="btn-close-modal" class="close-btn">&times;</button>
             </div>
             <table class="prizes-table">
@@ -97,17 +105,39 @@
                     <tr>
                         <th>Premio</th>
                         <th>Vincitore</th>
-                        <th>Al numero</th>
+                        <th>Estrazione</th>
                     </tr>
                 </thead>
                 <tbody id="prizes-table-body">
-                    <tr><td>AMBO</td><td>-</td><td>-</td></tr>
-                    <tr><td>TERNA</td><td>-</td><td>-</td></tr>
-                    <tr><td>QUATERNA</td><td>-</td><td>-</td></tr>
-                    <tr><td>CINQUINA</td><td>-</td><td>-</td></tr>
-                    <tr><td>TOMBOLA</td><td>-</td><td>-</td></tr>
+                    <tr><td><strong>AMBO</strong></td><td>-</td><td>-</td></tr>
+                    <tr><td><strong>TERNA</strong></td><td>-</td><td>-</td></tr>
+                    <tr><td><strong>QUATERNA</strong></td><td>-</td><td>-</td></tr>
+                    <tr><td><strong>CINQUINA</strong></td><td>-</td><td>-</td></tr>
+                    <tr><td><strong>TOMBOLA</strong></td><td>-</td><td>-</td></tr>
                 </tbody>
             </table>
+        </div>
+    </div>
+
+    <!-- MODALE FINE PARTITA (TOMBOLA) -->
+    <div id="gameover-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Partita Terminata — Tombola!</h2>
+            </div>
+            <table class="prizes-table">
+                <thead>
+                    <tr>
+                        <th>Premio</th>
+                        <th>Vincitore</th>
+                        <th>Estrazione</th>
+                    </tr>
+                </thead>
+                <tbody id="gameover-table-body"></tbody>
+            </table>
+            <div style="margin-top: 20px; text-align: center;">
+                <button id="btn-exit-home" class="btn highlight" style="width: 100%;">Esci</button>
+            </div>
         </div>
     </div>
 

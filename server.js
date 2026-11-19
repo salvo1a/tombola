@@ -10,8 +10,13 @@ const io = new Server(server);
 app.use(express.static(path.join(__dirname, 'public')));
 
 const rooms = {};
+const MAX_NAME_LENGTH = 20;
 
-// Genera un PIN univoco a 6 cifre
+function sanitizeName(name) {
+    if (typeof name !== 'string') return '';
+    return name.trim().slice(0, MAX_NAME_LENGTH);
+}
+
 function generateUniquePin() {
     let pin;
     do {
@@ -20,7 +25,6 @@ function generateUniquePin() {
     return pin;
 }
 
-// Genera i 6 quadranti fissi del tabellone dell'Host (come nella cartella tradizionale)
 function generateHostBoards() {
     const boards = [];
     const startOffsets = [1, 6, 31, 36, 61, 66];
@@ -39,14 +43,11 @@ function generateHostBoards() {
     return boards;
 }
 
-// Genera una cartella classica 3x9 valida
 function generatePlayerCard() {
     while (true) {
         const grid = Array.from({ length: 3 }, () => Array(9).fill(null));
         const colCounts = Array(9).fill(0);
-        let valid = true;
 
-        // 1. Scegli 5 colonne per ogni riga
         for (let r = 0; r < 3; r++) {
             const cols = [0, 1, 2, 3, 4, 5, 6, 7, 8].sort(() => Math.random() - 0.5).slice(0, 5);
             cols.forEach(c => {
@@ -55,10 +56,8 @@ function generatePlayerCard() {
             });
         }
 
-        // Ogni colonna deve avere almeno 1 numero
         if (colCounts.some(count => count === 0)) continue;
 
-        // 2. Popola con numeri casuali ordinati per colonna
         for (let c = 0; c < 9; c++) {
             const min = c === 0 ? 1 : c * 10;
             const max = c === 8 ? 90 : c * 10 + 9;
@@ -73,12 +72,11 @@ function generatePlayerCard() {
                 }
             }
         }
-        if (valid) return grid;
+        return grid;
     }
 }
 
-// Controlla se una serie di cartelle ha raggiunto il prossimo premio disponibile
-function checkPrizes(room, boards, markedSet, winnerName, isHost) {
+function checkPrizes(room, boards, markedSet, winnerName) {
     const prizeOrder = ['ambo', 'terna', 'quaterna', 'cinquina', 'tombola'];
     const nextPrize = prizeOrder.find(p => !room.prizesWon[p]);
     if (!nextPrize) return;
@@ -123,18 +121,39 @@ function checkPrizes(room, boards, markedSet, winnerName, isHost) {
             winData,
             allPrizes: room.prizesWon
         });
+
+        if (nextPrize === 'tombola') {
+            room.gameOver = true;
+            io.to(room.pin).emit('gameOver', {
+                allPrizes: room.prizesWon
+            });
+        }
     }
+}
+
+function getPublicPlayers(room) {
+    return room.players.map(p => ({
+        name: p.name,
+        cardsCount: p.cardsCount
+    }));
 }
 
 io.on('connection', (socket) => {
     // 1. CREAZIONE STANZA
-    socket.on('createRoom', () => {
+    socket.on('createRoom', ({ hostName } = {}) => {
+        const cleanHostName = sanitizeName(hostName);
+        if (!cleanHostName) {
+            return socket.emit('createRoomError', 'Inserisci il tuo nome (max 20 caratteri).');
+        }
+
         const pin = generateUniquePin();
         rooms[pin] = {
             pin,
             hostId: socket.id,
+            hostName: cleanHostName,
             disconnectTimeout: null,
             gameStarted: false,
+            gameOver: false,
             players: [],
             extractedNumbers: [],
             currentNumber: null,
@@ -142,48 +161,43 @@ io.on('connection', (socket) => {
             prizesWon: { ambo: null, terna: null, quaterna: null, cinquina: null, tombola: null }
         };
         socket.join(pin);
-        socket.emit('roomCreated', { pin });
+        socket.emit('roomCreated', { pin, hostName: cleanHostName });
     });
 
-    // RICONNESSIONE DELL'HOST (se ricarica la pagina con l'URL salvato)
-    socket.on('reconnectHost', (pin) => {
-        if (rooms[pin]) {
-            // Annulla l'eventuale timer di chiusura stanza attivato dal refresh
-            if (rooms[pin].disconnectTimeout) {
-                clearTimeout(rooms[pin].disconnectTimeout);
-                rooms[pin].disconnectTimeout = null;
+    // RICONNESSIONE HOST
+    socket.on('reconnectHost', ({ pin, hostName } = {}) => {
+        const room = rooms[pin];
+        if (room) {
+            if (room.disconnectTimeout) {
+                clearTimeout(room.disconnectTimeout);
+                room.disconnectTimeout = null;
             }
-
-            rooms[pin].hostId = socket.id;
+            room.hostId = socket.id;
+            if (sanitizeName(hostName)) {
+                room.hostName = sanitizeName(hostName);
+            }
             socket.join(pin);
-            
-            if (rooms[pin].gameStarted) {
-                // Se la partita era già iniziata, rimanda il tabellone
-                socket.emit('gameStartedHost', { hostBoards: rooms[pin].hostBoards });
-                
-                // Riallinea anche i numeri già estratti sul tabellone dell'Host
-                if (rooms[pin].extractedNumbers.length > 0) {
-                    rooms[pin].extractedNumbers.forEach((num, idx) => {
-                        socket.emit('numberExtracted', {
-                            number: num,
-                            totalExtracted: idx + 1,
-                            lastSix: rooms[pin].extractedNumbers.slice(0, idx + 1).slice(-6).reverse()
-                        });
-                    });
-                }
+
+            if (room.gameStarted) {
+                socket.emit('gameStartedHost', {
+                    hostBoards: room.hostBoards,
+                    extractedNumbers: room.extractedNumbers,
+                    allPrizes: room.prizesWon,
+                    gameOver: room.gameOver
+                });
             } else {
-                // Altrimenti ricarica la lobby con il conteggio giocatori attuale
-                socket.emit('roomCreated', { pin });
-                io.to(pin).emit('updatePlayersList', rooms[pin].players);
+                socket.emit('roomCreated', { pin, hostName: room.hostName });
+                io.to(pin).emit('updatePlayersList', getPublicPlayers(room));
             }
-            console.log(`Host riconnesso alla stanza ${pin}`);
         } else {
-            // Se la stanza non esiste più sul server (es. riavvio del server), ne crea una nuova con quel PIN
+            const cleanHostName = sanitizeName(hostName) || 'Host';
             rooms[pin] = {
                 pin,
                 hostId: socket.id,
+                hostName: cleanHostName,
                 disconnectTimeout: null,
                 gameStarted: false,
+                gameOver: false,
                 players: [],
                 extractedNumbers: [],
                 currentNumber: null,
@@ -191,8 +205,42 @@ io.on('connection', (socket) => {
                 prizesWon: { ambo: null, terna: null, quaterna: null, cinquina: null, tombola: null }
             };
             socket.join(pin);
-            socket.emit('roomCreated', { pin });
-            console.log(`Stanza ${pin} ricreata per riconnessione Host.`);
+            socket.emit('roomCreated', { pin, hostName: cleanHostName });
+        }
+    });
+
+    // RICONNESSIONE GIOCATORE VIA TOKEN
+    socket.on('reconnectPlayer', ({ pin, playerToken }) => {
+        const room = rooms[pin];
+        if (!room || !playerToken) {
+            return socket.emit('reconnectPlayerFailed');
+        }
+
+        const player = room.players.find(p => p.token === playerToken);
+        if (!player) {
+            return socket.emit('reconnectPlayerFailed');
+        }
+
+        if (player.disconnectTimeout) {
+            clearTimeout(player.disconnectTimeout);
+            player.disconnectTimeout = null;
+        }
+
+        player.id = socket.id;
+        socket.join(pin);
+
+        if (room.gameStarted) {
+            socket.emit('restorePlayerGame', {
+                cards: player.cards,
+                markedNumbers: Array.from(player.markedNumbers),
+                extractedNumbers: room.extractedNumbers,
+                currentNumber: room.currentNumber,
+                allPrizes: room.prizesWon,
+                gameOver: room.gameOver
+            });
+        } else {
+            socket.emit('joinedRoom', { pin, playerToken: player.token });
+            io.to(pin).emit('updatePlayersList', getPublicPlayers(room));
         }
     });
 
@@ -210,18 +258,24 @@ io.on('connection', (socket) => {
         const room = rooms[pin];
         if (!room || room.gameStarted || room.players.length >= 8) return;
 
+        const cleanName = sanitizeName(name);
+        if (!cleanName) return;
+
+        const playerToken = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
         const newPlayer = {
+            token: playerToken,
             id: socket.id,
-            name: name.trim(),
+            name: cleanName,
             cardsCount: Math.min(Math.max(parseInt(cardsCount) || 1, 1), 6),
             cards: [],
-            markedNumbers: new Set()
+            markedNumbers: new Set(),
+            disconnectTimeout: null
         };
 
         room.players.push(newPlayer);
         socket.join(pin);
-        socket.emit('joinedRoom', { pin, player: newPlayer });
-        io.to(pin).emit('updatePlayersList', room.players);
+        socket.emit('joinedRoom', { pin, playerToken });
+        io.to(pin).emit('updatePlayersList', getPublicPlayers(room));
     });
 
     // 4. AVVIO PARTITA (Host)
@@ -230,24 +284,32 @@ io.on('connection', (socket) => {
         if (!room || room.hostId !== socket.id) return;
 
         room.gameStarted = true;
+        room.gameOver = false;
 
-        // Genera le cartelle per ogni giocatore
         room.players.forEach(p => {
             p.cards = [];
             for (let i = 0; i < p.cardsCount; i++) {
                 p.cards.push(generatePlayerCard());
             }
-            io.to(p.id).emit('gameStartedPlayer', { cards: p.cards });
+            io.to(p.id).emit('gameStartedPlayer', {
+                cards: p.cards,
+                extractedNumbers: room.extractedNumbers,
+                allPrizes: room.prizesWon
+            });
         });
 
-        // Invia il tabellone all'Host
-        socket.emit('gameStartedHost', { hostBoards: room.hostBoards });
+        socket.emit('gameStartedHost', {
+            hostBoards: room.hostBoards,
+            extractedNumbers: room.extractedNumbers,
+            allPrizes: room.prizesWon,
+            gameOver: room.gameOver
+        });
     });
 
     // 5. ESTRAZIONE NUMERO (Host)
     socket.on('extractNumber', (pin) => {
         const room = rooms[pin];
-        if (!room || room.hostId !== socket.id || !room.gameStarted) return;
+        if (!room || room.hostId !== socket.id || !room.gameStarted || room.gameOver) return;
         if (room.extractedNumbers.length >= 90 || room.prizesWon.tombola) return;
 
         let num;
@@ -258,60 +320,81 @@ io.on('connection', (socket) => {
         room.extractedNumbers.push(num);
         room.currentNumber = num;
 
-        // Invia l'estrazione a tutta la stanza
         io.to(pin).emit('numberExtracted', {
             number: num,
             totalExtracted: room.extractedNumbers.length,
             lastSix: room.extractedNumbers.slice(-6).reverse()
         });
 
-        // L'Host gioca in automatico col suo tabellone: controlliamo subito se vince qualcosa
         const hostSet = new Set(room.extractedNumbers);
-        checkPrizes(room, room.hostBoards, hostSet, 'Host (Tabellone)', true);
+        checkPrizes(room, room.hostBoards, hostSet, room.hostName);
     });
 
     // 6. GIOCATORE CLICCA UN NUMERO SULLA CARTELLA
     socket.on('markNumber', ({ pin, number }) => {
         const room = rooms[pin];
-        if (!room || !room.gameStarted) return;
+        if (!room || !room.gameStarted || room.gameOver) return;
 
         const player = room.players.find(p => p.id === socket.id);
         if (!player) return;
 
-        // Il numero deve essere effettivamente già uscito
         if (!room.extractedNumbers.includes(number)) return;
 
         player.markedNumbers.add(number);
 
-        // REGOLA DEL TURNO: vale per i premi SOLO se il numero cliccato è quello attualmente estratto
         if (number === room.currentNumber) {
-            checkPrizes(room, player.cards, player.markedNumbers, player.name, false);
+            checkPrizes(room, player.cards, player.markedNumbers, player.name);
         }
     });
 
-    // 7. DISCONNESSIONE
+    // USCITA MANUALE DALLA PARTITA
+    socket.on('leaveRoom', ({ pin, playerToken } = {}) => {
+        const room = rooms[pin];
+        if (!room) return;
+
+        if (room.hostId === socket.id) {
+            io.to(pin).emit('roomClosed', 'L\'Host ha terminato la partita.');
+            delete rooms[pin];
+            return;
+        }
+
+        const idx = room.players.findIndex(p => p.id === socket.id || (playerToken && p.token === playerToken));
+        if (idx !== -1) {
+            room.players.splice(idx, 1);
+            io.to(pin).emit('updatePlayersList', getPublicPlayers(room));
+        }
+    });
+
+    // 7. DISCONNESSIONE CON TOLLERANZA PER REFRESH
     socket.on('disconnect', () => {
         for (const pin in rooms) {
             const room = rooms[pin];
             if (room.hostId === socket.id) {
-                // Diamo 3 secondi di tolleranza prima di chiudere la stanza (per gestire il refresh F5 dell'Host)
                 room.disconnectTimeout = setTimeout(() => {
                     if (rooms[pin]) {
                         io.to(pin).emit('roomClosed', 'L\'Host ha chiuso la stanza.');
                         delete rooms[pin];
                     }
-                }, 3000);
+                }, 4000);
                 break;
             }
-            const idx = room.players.findIndex(p => p.id === socket.id);
-            if (idx !== -1) {
-                room.players.splice(idx, 1);
-                io.to(pin).emit('updatePlayersList', room.players);
+
+            const player = room.players.find(p => p.id === socket.id);
+            if (player) {
+                player.disconnectTimeout = setTimeout(() => {
+                    const currentRoom = rooms[pin];
+                    if (!currentRoom) return;
+                    const idx = currentRoom.players.findIndex(p => p.token === player.token);
+                    if (idx !== -1) {
+                        currentRoom.players.splice(idx, 1);
+                        io.to(pin).emit('updatePlayersList', getPublicPlayers(currentRoom));
+                    }
+                }, 4000);
                 break;
             }
         }
     });
 });
 
-const PORT = 3000;
-server.listen(PORT, () => console.log(`Server avviato su http://localhost:${PORT}`));
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Server avviato sulla porta ${PORT}`));
